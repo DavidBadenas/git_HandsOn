@@ -6,5 +6,5 @@ The code classifies a sequence as DNA or RNA, and optionally searches for a spec
 ## Usage
 
 ```python
-python seqClass.py -s <sequence> [-m <motif>]
+python seqClass.py -s <--sequence> [-m <--motif>]
 ```
