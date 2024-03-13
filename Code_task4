@@ -1,0 +1,105 @@
+# EXERCISE 4
+
+# Question 1
+# Move to folder ATAC-seq, and create folders to store bigBed data files and peaks analyses files. Make sure the files are organized in a consistent way as done for ChIP-seq.
+
+git clone https://github.com/bborsari/epigenomics_uvic
+cd epigenomics_uvic
+
+sudo docker run -v $PWD:$PWD -w $PWD --rm -it dgarrimar/epigenomics_course
+
+cd ATAC-seq
+
+mkdir data
+mkdir data/bigBed.files
+mkdir data/bed.files
+
+######################################################################################
+
+# Question 2
+# Retrieve from a newly generated metadata file ATAC-seq peaks (bigBed narrow, pseudoreplicated peaks, assembly GRCh38) for stomach and sigmoid_colon for the same donor used in the previous sections. Hint: have a look at what we did here. Make sure your md5sum values coincide with the ones provided by ENCODE.
+
+../bin/download.metadata.sh "https://www.encodeproject.org/metadata/?replicates.library.biosample.donor.uuid=d370683e-81e7-473f-8475-7716d027849b&status=released&status=submitted&status=in+progress&assay_slims=DNA+accessibility&assay_title=ATAC-seq&biosample_ontology.term_name=sigmoid+colon&biosample_ontology.term_name=stomach&type=Experiment"
+
+head -1 metadata.tsv
+
+
+grep -F ATAC-seq metadata.tsv |\
+grep -F "bigBed_narrowPeak" |\
+grep -F "pseudoreplicated_peaks" |\
+grep -F "GRCh38" |\
+awk 'BEGIN{FS=OFS="\t"}{print $1, $11}' |\
+sort -k2,2 -k1,1r |\
+sort -k2,2 -u > analyses/bigBed.peaks.ids.txt
+
+
+cut -f1 analyses/bigBed.peaks.ids.txt |\
+while read filename; do
+  wget -P data/bigBed.files "https://www.encodeproject.org/files/$filename/@@download/$filename.bigBed"
+done
+
+for file_type in bigBed; do
+  ../bin/selectRows.sh <(cut -f1 analyses/"$file_type".*.ids.txt) metadata.tsv | cut -f1,46 > data/"$file_type".files/md5sum.txt
+
+cat data/bigBed.files/md5sum.txt |\
+  while read filename original_md5sum; do 
+    md5sum data/bigBed.files/"$filename".bigBed |\
+    awk -v filename="$filename" -v original_md5sum="$original_md5sum" 'BEGIN{FS=" ";OFS="\t"}{print filename, original_md5sum, $1}' 
+  done > tmp 
+
+mv tmp data/bigBed.files/md5sum.txt
+awk '$2!=$3' data/bigBed.files/md5sum.txt  
+
+######################################################################################
+
+# Question 3
+# For each tissue, run an intersection analysis using BEDTools: report 1) the number of peaks that intersect promoter regions, 2) the number of peaks that fall outside gene coordinates (whole gene body, not just the promoter regions).
+
+mkdir analyses/peaks.analysis
+
+cut -f1 analyses/bigBed.peaks.ids.txt |\
+while read filename; do
+  bigBedToBed data/bigBed.files/"$filename".bigBed data/bed.files/"$filename".bed
+done
+
+mkdir annotation
+cp ../ChIP-seq/annotation/gencode.v24.protein.coding.non.redundant.TSS.bed annotation
+
+cut -f-2 analyses/bigBed.peaks.ids.txt |\
+while read filename tissue; do 
+  echo "$tissue" 
+  bedtools intersect -a data/bed.files/"$filename".bed -b  annotation/gencode.v24.protein.coding.non.redundant.TSS.bed -u |\
+  wc -l
+done
+
+# Output
+# sigmoid_colon
+# 47871
+# stomach
+# 44749
+
+cp ../ChIP-seq/annotation/gencode.v24.protein.coding.gene.body.bed annotation
+
+cut -f-2 analyses/bigBed.peaks.ids.txt |\
+while read filename tissue; do 
+  echo "$tissue"
+  bedtools intersect -a data/bed.files/"$filename".bed -b  annotation/gencode.v24.protein.coding.gene.body.bed -v |\
+  wc -l
+done
+
+# Output
+# sigmoid_colon
+# 37035
+# stomach
+# 34537
+
+
+# We save it in a txt
+
+cut -f-2 analyses/bigBed.peaks.ids.txt | \
+while read filename tissue; do
+    bedtools intersect -a data/bed.files/"$filename".bed \
+                       -b annotation/gencode.v24.protein.coding.gene.body.bed \
+                       -v > analyses/peaks.analysis/"$tissue".outside.gene.body.txt
+done
+  
