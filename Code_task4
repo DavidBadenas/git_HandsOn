@@ -10,6 +10,7 @@ sudo docker run -v $PWD:$PWD -w $PWD --rm -it dgarrimar/epigenomics_course
 
 cd ATAC-seq
 
+mkdir analyses
 mkdir data
 mkdir data/bigBed.files
 mkdir data/bed.files
@@ -38,8 +39,7 @@ while read filename; do
   wget -P data/bigBed.files "https://www.encodeproject.org/files/$filename/@@download/$filename.bigBed"
 done
 
-for file_type in bigBed; do
-  ../bin/selectRows.sh <(cut -f1 analyses/"$file_type".*.ids.txt) metadata.tsv | cut -f1,46 > data/"$file_type".files/md5sum.txt
+../bin/selectRows.sh <(cut -f1 analyses/"$file_type".*.ids.txt) metadata.tsv | cut -f1,46 > data/"$file_type".files/md5sum.txt
 
 cat data/bigBed.files/md5sum.txt |\
   while read filename original_md5sum; do 
