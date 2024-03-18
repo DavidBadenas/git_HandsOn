@@ -1,0 +1,215 @@
+# EXERCISE 5
+
+# Task 1
+
+cd epigenomics_uvic
+mkdir regulatory_elements
+cd regulatory_elements
+mkdir data
+mkdir analyses
+mkdir analyses/peaks.analysis
+mkdir data/bed.files
+mkdir data/bigBed.files
+
+######################################################################################
+
+# Task 2
+
+../bin/download.metadata.sh "https://www.encodeproject.org/metadata/?replicates.library.biosample.donor.uuid=d370683e-81e7-473f-8475-7716d027849b&status=released&status=submitted&status=in+progress&assay_title=Histone+ChIP-seq&target.label=H3K27ac&target.label=H3K4me1&biosample_ontology.term_name=sigmoid+colon&biosample_ontology.term_name=stomach&type=Experiment"
+
+# H3K4me1
+
+grep -F H3K4me1 metadata.tsv|\
+grep -F "bigBed_narrowPeak"|\
+grep -F "pseudoreplicated_peaks" |\
+grep -F "GRCh38" |
+awk 'BEGIN{FS=OFS="\t"}{print $1, $11, $23}' |\
+sort -k2,2 -k1,1r |\
+sort -k2,2 -u > analyses/H3K4me1.bigBed.peaks.ids.txt
+
+cut -f1 analyses/H3K4me1.bigBed.peaks.ids.txt |\
+while read filename; do
+  wget -P data/bigBed.files "https://www.encodeproject.org/files/$filename/@@download/$filename.bigBed"
+done
+
+#H3K27ac
+
+grep -F H3K27ac metadata.tsv|\
+grep -F "bigBed_narrowPeak"|\
+grep -F "pseudoreplicated_peaks" |\
+grep -F "GRCh38" |
+awk 'BEGIN{FS=OFS="\t"}{print $1, $11, $23}' |\
+sort -k2,2 -k1,1r |\
+sort -k2,2 -u > analyses/H3K27ac.bigBed.peaks.ids.txt
+
+cut -f1 analyses/H3K27ac.bigBed.peaks.ids.txt |\
+while read filename; do
+  wget -P data/bigBed.files "https://www.encodeproject.org/files/$filename/@@download/$filename.bigBed"
+done
+
+
+for file_type in bigBed; do
+
+  ../bin/selectRows.sh <(cut -f1 analyses/*"$file_type".peaks.ids.txt) metadata.tsv | cut -f1,46 > data/"$file_type".files/md5sum.txt
+
+  cat data/"$file_type".files/md5sum.txt |\
+  while read filename original_md5sum; do 
+    md5sum data/"$file_type".files/"$filename"."$file_type" |\
+    awk -v filename="$filename" -v original_md5sum="$original_md5sum" 'BEGIN{FS=" "; OFS="\t"}{print filename, original_md5sum, $1}' 
+  done > tmp 
+  mv tmp data/"$file_type".files/md5sum.txt
+
+  awk '$2!=$3' data/"$file_type".files/md5sum.txt
+
+done
+
+# H3K4me1
+
+cut -f1 analyses/H3K4me1.bigBed.peaks.ids.txt|\
+while read filename; do
+        bigBedToBed data/bigBed.files/"$filename".bigBed data/bed.files/"$filename".bed
+done
+
+# H3K27ac
+
+cut -f1 analyses/H3K27ac.bigBed.peaks.ids.txt|\
+while read filename; do
+        bigBedToBed data/bigBed.files/"$filename".bigBed data/bed.files/"$filename".bed
+done
+
+cut -f-2 analyses/H3K4me1.bigBed.peaks.ids.txt |
+while read filename tissue; do 
+  bedtools intersect -a data/bed.files/"$filename".bed -b ../ATAC-seq/analyses/peaks.analysis/ATACpeaks.outside.gene."$tissue".bed -u > analyses/peaks.analysis/"$tissue".H3K4me1.outside.bed
+done
+
+cut -f-2 analyses/H3K27ac.bigBed.peaks.ids.txt |
+while read filename tissue; do 
+  bedtools intersect -a data/bed.files/"$filename".bed -b ../ATAC-seq/analyses/peaks.analysis/ATACpeaks.outside.gene."$tissue".bed -u > analyses/peaks.analysis/"$tissue".H3K27ac.outside.bed
+done
+
+for tissue in stomach sigmoid_colon; do
+  cut -f-2 analyses/H3K27ac.bigBed.peaks.ids.txt |
+  while read filename; do
+    bedtools intersect -a analyses/peaks.analysis/"$tissue".H3K27ac.outside.bed -b analyses/peaks.analysis/"$tissue".H3K4me1.outside.bed -u > analyses/peaks.analysis/overlap.outside.histone."$tissue".bed
+  done
+done
+
+wc -l analyses/peaks.analysis/*histone*.bed
+
+7367 sigmoid_colon
+4342 stomach
+
+######################################################################################
+
+# Task 3
+
+head -1 analyses/peaks.analysis/overlap.outside.histone.stomach.bed | awk 'BEGIN{FS=OFS="\t"}{for (i=1;i<=NF;i++){print $i, i}}'
+
+for tissue in sigmoid_colon stomach; do
+  awk 'BEGIN{FS=OFS="\t"} $1=="chr1" {print $4,$2}' analyses/peaks.analysis/overlap.outside.histone."$tissue".bed > analyses/peaks.analysis/"$tissue".regulatory_elements.starts.tsv
+done
+
+wc -l analyses/peaks.analysis/*.regulatory_elements.starts.tsv
+
+# 795 sigmoid colon regulatory elements
+# 528 stomach regulatory elements
+
+######################################################################################
+
+# Task 4
+
+awk 'BEGIN{FS=OFS="\t"} $1=="chr1" {if ($6=="+"){start=$2} else {start=$3}; print $4, start}' ../ATAC-seq/annotation/gencode.v24.protein.coding.gene.body.bed > analyses/gene.starts.tsv
+
+head -5 analyses/gene.starts.tsv
+
+######################################################################################
+
+# Task 5
+
+#This is the modified python file: 
+#!/usr/bin/env python
+
+
+#************
+# LIBRARIES *
+#************
+
+import sys
+from optparse import OptionParser
+
+
+#*****************
+# OPTION PARSING *
+#*****************
+
+parser = OptionParser()
+parser.add_option("-i", "--input", dest="input")
+parser.add_option("-s", "--start", dest="start")
+options, args = parser.parse_args()
+
+open_input = open(options.input)
+enhancer_start = int(options.start)
+
+
+#********
+# BEGIN *
+#********
+
+x=1000000 # set maximum distance to 1 Mb
+selectedGene="" # initialize the gene as empty
+selectedGeneStart=0 # initialize the start coordinate of the gene as empty
+
+for line in open_input.readlines(): # for each line in the input file
+	gene, y = line.strip().split('\t') # split the line into two columns based on a tab 
+	position = int(y) # define a variable called position that correspond to the integer of the start of the gene
+	diff_pos_start = abs(position-enhancer_start)# compute the absolute value of the difference between position and enhancer_start
+
+	if diff_pos_start < x: # if this absolute value is lower than x
+		x = diff_pos_start# this value will now be your current x
+		selectedGene = gene# save gene as selectedGene
+		selectedGeneStart = position # save position as selectedGeneStart
+
+print "\t".join([selectedGene, str(selectedGeneStart), str(x)])
+
+# Function call
+
+python ../bin/get.distance.py --input analyses/gene.starts.tsv --start 980000
+
+ENSG00000187642.9       982093  2093
+
+######################################################################################
+
+# Task 6
+
+for tissue in stomach sigmoid_colon; do
+  cat analyses/peaks.analysis/"$tissue".regulatory_elements.starts.tsv |
+  while read element start; do
+    python ../bin/get.distance.py --input analyses/gene.starts.tsv --start "$start"
+  done > analyses/peaks.analysis/"$tissue".gene_distances.tsv
+done
+
+######################################################################################
+
+# Task 7
+
+# Create the R function
+R
+compute_mean_median <- function(file) {
+  distances <- read.delim(file, header = FALSE)
+  cat("Mean Distance:", mean(distances[,3]), "\n")
+  cat("Median Distance:", median(distances[,3]), "\n")
+}
+
+# Stomach
+
+compute_mean_median("analyses/peaks.analysis/stomach.gene_distances.tsv")
+
+Mean Distance: 47878.12
+Median Distance: 27245
+
+# Sigmoid colon
+
+compute_mean_median("analyses/peaks.analysis/sigmoid_colon.gene_distances.tsv")
+
+Mean Distance: 76026.47
+Median Distance: 36609
